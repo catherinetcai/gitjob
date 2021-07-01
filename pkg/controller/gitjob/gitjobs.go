@@ -17,6 +17,7 @@ import (
 	corev1controller "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	"github.com/rancher/wrangler/pkg/kstatus"
 	"github.com/rancher/wrangler/pkg/name"
+	"github.com/sirupsen/logrus"
 	giturls "github.com/whilp/git-urls"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -65,6 +66,7 @@ type Handler struct {
 }
 
 func (h Handler) generate(obj *v1.GitJob, status v1.GitJobStatus) ([]runtime.Object, v1.GitJobStatus, error) {
+	logrus.Infof("Calling generate on gitjob %+v", obj)
 	// re-enqueue after syncInterval(seconds)
 	interval := obj.Spec.SyncInterval
 	if interval == 0 {
@@ -74,6 +76,7 @@ func (h Handler) generate(obj *v1.GitJob, status v1.GitJobStatus) ([]runtime.Obj
 	if obj.Spec.Git.Revision == "" {
 		if shouldSync(status, interval) {
 			commit, err := git.LatestCommit(obj, h.secrets)
+			logrus.Info("Syncing to get the latest git commit: %s", commit)
 			if err != nil {
 				kstatus.SetError(obj, err.Error())
 				return nil, obj.Status, nil
@@ -101,8 +104,10 @@ func (h Handler) generate(obj *v1.GitJob, status v1.GitJobStatus) ([]runtime.Obj
 
 	// if force delete is set, delete the job to make sure a new job is created
 	if obj.Spec.ForceUpdateGeneration != status.UpdateGeneration {
+		logrus.Infof("Force delete is set, deleting old job: %s", jobName(obj))
 		status.UpdateGeneration = obj.Spec.ForceUpdateGeneration
 		if err := h.gitjobs.Delete(obj.Namespace, jobName(obj), &metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+			logrus.Errorf("Ruh roh, failed deleting old job: %s", jobName(obj))
 			return nil, status, err
 		}
 	}
@@ -156,10 +161,12 @@ func (h Handler) generateJob(obj *v1.GitJob) (*batchv1.Job, error) {
 
 	cloneContainer, err := h.generateCloneContainer(obj)
 	if err != nil {
+		logrus.Errorf("Failed to create a clone container, %+v", obj)
 		return nil, err
 	}
 	initContainers, err := h.generateInitContainer(obj)
 	if err != nil {
+		logrus.Errorf("Failed to create an init container, %+v", obj)
 		return nil, err
 	}
 
@@ -277,6 +284,7 @@ func (h Handler) generateJob(obj *v1.GitJob) (*batchv1.Job, error) {
 	}
 
 	job.Spec.Template.Spec.Containers = append([]corev1.Container{cloneContainer}, job.Spec.Template.Spec.Containers...)
+	logrus.Info("You made it all the way through the generate function on gitjob... good job!")
 	return job, nil
 }
 
